@@ -1,0 +1,99 @@
+import base64
+import binascii
+import fractions
+import numbers
+from Crypto.PublicKey import RSA
+from Crypto.Util import asn1
+from Crypto.Cipher import PKCS1_OAEP
+
+keys = []
+vulnerablePairs = [] #list of pairs of indices whose moduli have non-trivial gcd's
+factoredkeys = {}  #dict from index to tuple of p,q,phi
+#use these to hold the pkcs1_oaep objects
+def readKeys():
+    for i in range(0,23):
+        f = open(str(i)+'.key','r')
+        curKeyLines =  f.read().splitlines()
+        curKeyLines = curKeyLines[1:-1]
+        curKey = ''.join(curKeyLines)
+        f.close()
+        # should decode key using RSA format to get n,e
+        keyDER = base64.b64decode(curKey)
+        keyPub = RSA.importKey(keyDER)
+        keys.append((keyPub.n,keyPub.e))
+
+
+def pairwiseGCD():
+    for i in range(0,len(keys)):
+        for j in range(i+1,len(keys)):
+            curGCD = fractions.gcd(keys[i][0],keys[j][0])
+            if curGCD!=1:
+                vulnerablePairs.append({"first":i,"second":j,"gcd":curGCD})
+
+def factorModuli():            
+    for pair in vulnerablePairs:
+        i = pair["first"]
+        j = pair["second"]
+        gcd = pair["gcd"]
+        factorModulus(i,gcd)
+        factorModulus(j,gcd)
+    
+    #print factoredkeys
+
+def factorModulus(index,gcd):
+    if index not in factoredkeys:
+        e = keys[index][1]
+        n = keys[index][0]
+        p = gcd
+        q = n/p
+        phi = (p-1)*(q-1)
+        d = modinv(e, phi)
+        if not isinstance(q, numbers.Integral):
+            raise Exception(str(q)+ 'is not integer')
+        if fractions.gcd(e,phi)!=1:
+            raise Exception('e and phi are not co-prime')
+        
+        if not (d*e)%phi == 1:
+            raise Exception('d is not the inverse of e')
+        if not p*q == n:
+            raise Exception('p,q are not correct')
+
+        factoredkeys[index] = (n,e,d,p,q)
+        
+def egcd(a, b):
+    if a == 0:
+        return (b, 0, 1)
+    else:
+        g, y, x = egcd(b % a, a)
+        return (g, x - (b // a) * y, y)
+
+def modinv(a, m):
+    g, x, y  = egcd(a, m)
+    if g != 1:
+        raise Exception('modular inverse does not exist')
+    else:
+        return x % m
+        
+def decryptMessages():
+    for i in range(0,23):
+        f = open(str(i)+'.enc','r')
+        curMessage = f.read()
+        f.close()
+        #construct the private key
+        priv_key = RSA.construct(factoredkeys[i])
+        #decrypt using RSA-OAEP
+        decrypter = PKCS1_OAEP.new(priv_key)
+        print decrypter.decrypt(curMessage)
+
+def doStuff():
+    readKeys()
+    pairwiseGCD()
+    factorModuli()
+    decryptMessages()
+
+if __name__ == "__main__":
+    #from the gcd's, can factor the moduluses as n=pq.  
+    #from p,q can figure out phi = (p-1)(q-1)
+    #now can get d = e^-1 mod phi
+    #decrypt m = c^d mod n
+    doStuff()
